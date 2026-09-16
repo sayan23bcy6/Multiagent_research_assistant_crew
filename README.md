@@ -1,4 +1,4 @@
-# The Research Assistant Crew 🧠⚡
+# The Research Assistant Crew
 
 > A manager agent delegates a research question to three specialist agents, then synthesizes their findings into one report — no human stitching required.
 
