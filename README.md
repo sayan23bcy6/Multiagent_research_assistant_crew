@@ -1,59 +1,45 @@
 # The Research Assistant Crew
 
-> A manager agent delegates a research question to three specialist agents, then synthesizes their findings into one report — no human stitching required.
+> A manager agent delegates a research question to three specialist agents, then synthesizes their findings into one verified report — no human stitching required.
 
-Built with **Streamlit**, **LangGraph**, **LangChain**, **Groq** (`openai/gpt-oss-120b`), and **Tavily Web Search**.
+Built with **Streamlit**, **LangGraph**, **LangChain-Groq**, **Groq** (`openai/gpt-oss-120b`), and **Tavily Web Search**.
 
 ---
 
-## 🏛️ Architecture & Agent Team
+## 🏛️ Architecture
 
 ```
-                        ┌────────────────────────┐
-                        │     MANAGER AGENT      │
-                        │  (Breaks into subtasks)│
-                        └───────────┬────────────┘
-                                    │
-                                    │ delegates
-                                    ▼
-       ┌────────────────────────────┼────────────────────────────┐
-       ▼                            ▼                            ▼
-┌─────────────────────────┐  ┌─────────────────────────┐  ┌─────────────────────────┐
-│      SEARCH AGENT       │  │     ANALYSIS AGENT      │  │      WRITER AGENT       │
-│ Senior Research Librar. │  │ Critical Research Anal. │  │ Technical Report Writer │
-│  (Tavily Web Search)    │  │  (Claims & Evidence)    │  │  (Structured Synthesis) │
-└─────────────────────────┘  └─────────────────────────┘  └─────────────────────────┘
-       │                            │                            │
-       └────────────────────────────┼────────────────────────────┘
-                                    │
-                                    │ reports back
-                                    ▼
-                        ┌────────────────────────┐
-                        │      FINAL REPORT      │
-                        │ (Manager review & QA)  │
-                        └────────────────────────┘
+manager_plan → search_agent → analysis_agent ─┬→ writer_agent → manager_review ─┬→ END
+                    ↑                          │        ↑                         │
+                    └── (search retry ≤2) ─────┘        └── (writer retry ≤1) ───┘
 ```
+
+The **Manager** produces a structured JSON plan (Pydantic-validated). The **Search Agent** uses
+those queries directly — no redundant LLM call. If fewer than 3 sources are cited after analysis,
+the pipeline retries search (up to 2 times). After the Manager reviews the draft, a reject verdict
+routes the **Writer** back for one revision.
+
+The architecture diagram is also rendered interactively in the **🏛️ Architecture** tab of the app.
 
 ### Specialist Agent Personas & Goals
 
-1. **Manager Agent**:
-   - **Role**: Research Manager & Orchestrator
-   - **Goal**: Breaks down research inquiry into targeted sub-tasks and directs the search librarian, then performs final QA on the writer's report.
-2. **Search Agent**:
-   - **Role**: Senior Research Librarian
-   - **Goal**: Find 5–8 credible, recent sources on the given topic and return title, URL, and a 1-line relevance note for each.
-   - **Backstory**: *"You've spent 15 years finding primary sources for investigative journalists. You distrust SEO content farms and always prefer official docs, papers, or first-party blogs."*
-   - **Tools**: Tavily Web Search.
-3. **Analysis Agent**:
-   - **Role**: Critical Research Analyst
-   - **Goal**: Extract the 3–5 strongest claims from the Search Agent's sources, each with supporting evidence and source citations.
-   - **Backstory**: *"You've reviewed thousands of papers for a research lab. You flag unsupported claims instead of repeating them, and you never merge two sources' claims into one without saying so."*
-   - **Tools**: None — pure reasoning.
-4. **Writer Agent**:
-   - **Role**: Technical Report Writer
-   - **Goal**: Turn the Analyst's claims into a structured report: a 2-sentence summary, 3–5 headed sections, and a sources list.
-   - **Backstory**: *"You write for busy engineers. No filler intros, no restating the question — you open with the answer and back it with the evidence you were given."*
-   - **Tools**: None — pure synthesis.
+| Agent | Role | Tools |
+|-------|------|-------|
+| **Manager** | Research Manager — plans sub-tasks, reviews final report | None |
+| **Search** | Senior Research Librarian — finds credible sources | Tavily Web Search (with raw content) |
+| **Analyst** | Critical Research Analyst — extracts 3–5 empirical claims | None — pure reasoning |
+| **Writer** | Technical Report Writer — structures the report | None — pure synthesis |
+
+---
+
+## 🔒 Source Integrity
+
+- Tavily results are kept as **structured data** (`TavilySource`) through the entire pipeline.
+- The Search Agent refers to sources by **index** (`Source #1`, `Source #2`, …) — the LLM never
+  writes raw URLs.
+- URLs in the final report are **validated** against the Tavily result set. Any unmatched URL
+  triggers a visible warning in the UI.
+- If LLM curation fails, an explicit **[UNCURATED]** notice is shown — there is no silent fallback.
 
 ---
 
@@ -63,11 +49,13 @@ Built with **Streamlit**, **LangGraph**, **LangChain**, **Groq** (`openai/gpt-os
 
 ```bash
 pip install -r requirements.txt
+# or with make:
+make install
 ```
 
 ### 2. Configure Environment Variables
 
-Create or edit your `.env` file (see `.env.example`):
+Copy `.env.example` to `.env`:
 
 ```ini
 GROQ_API_KEY=your_groq_api_key_here
@@ -75,21 +63,109 @@ TAVILY_API_KEY=your_tavily_api_key_here
 GROQ_MODEL=openai/gpt-oss-120b
 ```
 
-*(You can also input your API keys directly in the Streamlit web interface sidebar!)*
+*(API keys can also be entered in the Streamlit sidebar.)*
 
-### 3. Run the Streamlit Application
+### 3. Run the App
 
 ```bash
 streamlit run app.py
+# or:
+make run
 ```
+
+### 4. Docker
+
+```bash
+make docker
+# or:
+docker build -t research-crew:latest .
+docker run -p 8501:8501 \
+  -e GROQ_API_KEY=... \
+  -e TAVILY_API_KEY=... \
+  research-crew:latest
+```
+
+---
+
+## ⚙️ Configuration
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `GROQ_API_KEY` | *(required)* | Groq API key |
+| `TAVILY_API_KEY` | *(required)* | Tavily API key |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Model identifier |
+| `MAX_SEARCH_RETRIES` | `2` | Max search-agent retries if <3 sources cited |
+| `MAX_WRITER_RETRIES` | `1` | Max writer retries on manager reject |
+| `MAX_TOTAL_LLM_CALLS` | `20` | Hard cap on total LLM calls per run |
+| `SOURCE_CONTENT_CHAR_BUDGET` | `6000` | Max chars fetched per source (~1,500 tokens) |
+
+---
+
+## 🧪 Tests & CI
+
+```bash
+make test    # pytest (mocks Groq and Tavily — no API keys needed)
+make lint    # ruff + mypy
+```
+
+CI runs on every push and pull request via [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+---
+
+## 📊 Evaluation Harness
+
+```bash
+make evals   # requires live API keys — NOT run in CI
+```
+
+Results are written to [`evals/results.md`](evals/results.md).
+Scores: URL integrity, report structure, and key-point coverage (keyword heuristic).
+
+> **Latest eval scores**: Not yet run. Execute `make evals` locally after configuring API keys.
 
 ---
 
 ## 🌟 Key Features
 
-- **Multi-Agent Orchestration**: Stateful graph execution using `langgraph.graph.StateGraph`.
-- **High-Speed Inference**: Powered by Groq LLMs (default `openai/gpt-oss-120b` with fallbacks like `llama-3.3-70b-versatile`, `deepseek-r1-distill-llama-70b`, `qwen-qwq-32b`).
-- **Precision Primary Search**: Real-time web searching via Tavily API.
-- **Cyberpunk Dark Grid UI**: Matching the custom multi-agent architecture diagram styling.
-- **Live Execution Feedback**: Real-time progress indicators for every agent step.
-- **Export Capabilities**: 1-click Markdown download of verified research briefings.
+- **Structured Manager Plan**: JSON-validated `core_objective`, `sub_tasks`, and `search_queries`.
+- **Real Source Content**: Tavily `include_raw_content` with per-source 1,500-token budget.
+- **Source Integrity**: Index-based references, URL validation, no silent fallbacks.
+- **Revision Loops**: Search retries (≤2) and writer retries (≤1) based on quality signals.
+- **Per-Node Token Budgets**: Writer/Review get 6,000 tokens; Plan node gets 512.
+- **Agent Timeline**: Execution timeline with duration and token counts in the UI.
+- **Live Execution Feedback**: Real-time progress for every agent step.
+- **Export**: 1-click Markdown download of verified research briefings.
+
+---
+
+## 📁 Project Structure
+
+```
+.
+├── agents/
+│   ├── __init__.py      # lightweight — only state type exports
+│   ├── crew.py          # LangGraph graph, all node functions
+│   ├── prompts.py       # agent system prompts
+│   └── state.py         # ResearchState TypedDict + AgentLog, ManagerPlan, TavilySource
+├── tests/               # pytest unit tests (no API keys required)
+├── evals/               # evaluation harness (requires API keys)
+│   ├── questions.yaml
+│   ├── run_evals.py
+│   └── results.md
+├── .github/workflows/ci.yml
+├── app.py               # Streamlit UI
+├── Dockerfile
+├── Makefile
+├── CONTRIBUTING.md
+├── pyproject.toml
+└── requirements.txt
+```
+
+---
+
+## 🔮 Future Work
+
+- Model fallback: try next model in a list on 429 or model error.
+- Streaming token-by-token output per agent node.
+- Persistent run history and comparison across topics.
+- Semantic key-point scoring in the evaluation harness (instead of keyword match).

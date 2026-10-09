@@ -1,0 +1,70 @@
+questions:
+  - question: "What are the latest breakthroughs in quantum error correction and fault-tolerant quantum computing?"
+    key_points:
+      - "error correction"
+      - "surface code"
+      - "qubit"
+    good_source_note: "Academic papers from arXiv, IBM Quantum, Google Quantum AI."
+
+  - question: "How does DeepSeek-R1 use reinforcement learning to improve reasoning, and how does it compare to OpenAI o1?"
+    key_points:
+      - "reinforcement learning"
+      - "chain of thought"
+      - "benchmark"
+    good_source_note: "DeepSeek technical report, AI research blogs."
+
+  - question: "What is the current commercialization roadmap for solid-state batteries in electric vehicles?"
+    key_points:
+      - "solid-state"
+      - "energy density"
+      - "commercialization"
+    good_source_note: "Toyota, QuantumScape, automotive industry reports."
+
+  - question: "How do small language models (SLMs) like Phi-3 and Gemma compare to frontier LLMs for edge deployment?"
+    key_points:
+      - "edge"
+      - "parameters"
+      - "inference"
+    good_source_note: "Microsoft Phi-3 technical report, Google Gemma paper."
+
+  - question: "What are the key architectural innovations in transformer models that have emerged since GPT-4?"
+    key_points:
+      - "attention"
+      - "mixture of experts"
+      - "architecture"
+    good_source_note: "Research papers on MoE, sparse attention, state-space models."
+
+  - question: "What progress has been made in protein structure prediction and drug discovery using AI since AlphaFold2?"
+    key_points:
+      - "protein"
+      - "AlphaFold"
+      - "drug discovery"
+    good_source_note: "DeepMind publications, Nature papers on AI drug discovery."
+
+  - question: "How are autonomous driving systems handling edge cases and long-tail scenarios in 2025?"
+    key_points:
+      - "autonomous"
+      - "edge case"
+      - "safety"
+    good_source_note: "Waymo, Tesla, NHTSA technical reports."
+
+  - question: "What are the most effective techniques for reducing hallucinations in large language models?"
+    key_points:
+      - "hallucination"
+      - "retrieval augmented generation"
+      - "grounding"
+    good_source_note: "Academic papers on RAG, RLHF, constitutional AI."
+
+  - question: "What is the state of neuromorphic computing and how does it compare to conventional deep learning hardware?"
+    key_points:
+      - "neuromorphic"
+      - "spiking neural network"
+      - "energy efficiency"
+    good_source_note: "Intel Loihi, IBM TrueNorth research papers."
+
+  - question: "How has multi-agent LLM system design evolved, and what are current best practices for agent orchestration?"
+    key_points:
+      - "multi-agent"
+      - "orchestration"
+      - "tool use"
+    good_source_note: "LangGraph docs, AutoGen papers, CrewAI blog posts."
