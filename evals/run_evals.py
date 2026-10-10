@@ -15,7 +15,6 @@ Do NOT run in CI — requires live API keys.
 
 import datetime
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,11 +24,11 @@ import yaml
 # Allow running from repo root or evals/ directory
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
-from agents.crew import run_research_stream  # noqa: E402
+from agents.crew import check_report_structure, run_research_stream  # noqa: E402
 
 QUESTIONS_FILE = Path(__file__).parent / "questions.yaml"
 RESULTS_FILE = Path(__file__).parent / "results.md"
@@ -52,12 +51,8 @@ def score_url_integrity(final_report: str, raw_sources: list[dict]) -> float:
 
 
 def score_structure(final_report: str) -> bool:
-    """(b) True if report has Executive Summary, ≥2 content sections, and Sources."""
-    has_summary = bool(re.search(r"##\s*Executive\s+Summary", final_report, re.IGNORECASE))
-    sections = re.findall(r"^##\s+.+", final_report, re.MULTILINE)
-    has_sources = bool(re.search(r"##\s*Sources?", final_report, re.IGNORECASE))
-    content_sections = [s for s in sections if not re.search(r"(Executive\s+Summary|Sources?)", s, re.IGNORECASE)]
-    return has_summary and len(content_sections) >= 2 and has_sources
+    """(b) True if report has Executive Summary, 3–5 content sections, and Sources."""
+    return not check_report_structure(final_report)
 
 
 def score_key_points(final_report: str, key_points: list[str]) -> float:
