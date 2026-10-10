@@ -36,7 +36,7 @@ from agents.state import AgentLog, ManagerPlan, ResearchState, TavilySource
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Configurable revision caps and conditional routing (item 4)
+# Environment-configurable caps (item 4)
 # ---------------------------------------------------------------------------
 MAX_SEARCH_RETRIES: int = int(os.getenv("MAX_SEARCH_RETRIES", "2"))
 MAX_WRITER_RETRIES: int = int(os.getenv("MAX_WRITER_RETRIES", "1"))
@@ -45,7 +45,7 @@ MAX_TOTAL_LLM_CALLS: int = int(os.getenv("MAX_TOTAL_LLM_CALLS", "20"))
 # Per-source content token budget (item 2): ~1,500 tokens ≈ 6,000 chars
 SOURCE_CONTENT_CHAR_BUDGET: int = int(os.getenv("SOURCE_CONTENT_CHAR_BUDGET", "6000"))
 
-# Per-node max_tokens and truncation detection (item 5)
+# Per-node max_tokens (item 5)
 TOKENS_PLAN = 512
 TOKENS_SEARCH = 1024
 TOKENS_ANALYSIS = 2048
@@ -54,7 +54,7 @@ TOKENS_REVIEW = 6000
 
 
 # ---------------------------------------------------------------------------
-# Pydantic model for Manager plan and query routing (item 3)
+# Pydantic model for Manager plan (item 3)
 # ---------------------------------------------------------------------------
 class ManagerPlanModel(BaseModel):
     core_objective: str
@@ -116,7 +116,7 @@ def invoke_with_retry(
 
 
 # ---------------------------------------------------------------------------
-# Tavily search with real content and 1500-token budget (item 2)
+# Tavily search with real content (item 2)
 # ---------------------------------------------------------------------------
 
 def execute_tavily_search(
