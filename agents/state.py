@@ -53,6 +53,7 @@ class ResearchState(TypedDict):
     # Revision-loop counters (item 4)
     search_retry_count: int
     writer_retry_count: int
+    # Finish-reason tracking (item 5)
     manager_review_truncated: bool
     # Transient routing fields (item 4)
     _verdict: NotRequired[dict[str, Any] | None]

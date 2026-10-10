@@ -611,8 +611,7 @@ def build_research_graph(
     # -----------------------------------------------------------------------
     def route_after_review(state: ResearchState) -> str:
         # _verdict is a transient key — safe to use for routing only
-        verdict: dict[str, Any] = state.get("_verdict") or {}
-        state["_verdict"] = None
+        verdict: dict[str, Any] = state.pop("_verdict", {}) or {}
 
         retry_count = state.get("writer_retry_count", 0)
 
