@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "research-assistant-crew"
@@ -8,7 +8,6 @@ version = "0.2.0"
 description = "A multi-agent LangGraph research pipeline powered by Groq and Tavily."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
 authors = [{ name = "Research Crew Contributors" }]
 
 dependencies = [
@@ -29,6 +28,10 @@ dev = [
     "ruff==0.11.12",
     "mypy==1.16.1",
 ]
+
+[tool.setuptools]
+py-modules = ["app"]
+packages = ["agents"]
 
 [tool.ruff]
 line-length = 100
