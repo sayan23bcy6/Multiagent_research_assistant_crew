@@ -45,7 +45,7 @@ MAX_TOTAL_LLM_CALLS: int = int(os.getenv("MAX_TOTAL_LLM_CALLS", "20"))
 # Per-source content token budget (item 2): ~1,500 tokens ≈ 6,000 chars
 SOURCE_CONTENT_CHAR_BUDGET: int = int(os.getenv("SOURCE_CONTENT_CHAR_BUDGET", "6000"))
 
-# Per-node max_tokens (item 5)
+# Per-node max_tokens and truncation detection (item 5)
 TOKENS_PLAN = 512
 TOKENS_SEARCH = 1024
 TOKENS_ANALYSIS = 2048
