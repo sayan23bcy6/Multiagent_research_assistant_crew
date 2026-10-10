@@ -73,7 +73,7 @@ def get_llm(
     max_tokens: int = 2048,
 ) -> ChatGroq:
     """Initialize a Groq Chat LLM with the given per-node token budget."""
-    return ChatGroq(
+    return ChatGroq(  # type: ignore[call-arg]
         groq_api_key=groq_api_key,
         model_name=model,
         temperature=temperature,
@@ -611,10 +611,7 @@ def build_research_graph(
     # -----------------------------------------------------------------------
     def route_after_review(state: ResearchState) -> str:
         # _verdict is a transient key — safe to use for routing only
-        verdict = getattr(state, "_verdict", None) or {}
-        # Peel from state dict directly if set by the node
-        if isinstance(state, dict):
-            verdict = state.pop("_verdict", {}) or {}
+        verdict: dict[str, Any] = state.pop("_verdict", {}) or {}
 
         retry_count = state.get("writer_retry_count", 0)
 

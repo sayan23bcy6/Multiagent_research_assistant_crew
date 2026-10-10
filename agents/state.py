@@ -7,6 +7,8 @@ AgentLog is now used to type the agent_logs list (item 7 / item 8).
 
 from typing import Any, TypedDict
 
+from typing_extensions import NotRequired  # noqa: UP035 — keep compatible with Python 3.10 runtime
+
 
 class AgentLog(TypedDict):
     """Structured log entry produced by each agent node."""
@@ -53,3 +55,5 @@ class ResearchState(TypedDict):
     writer_retry_count: int
     # Finish-reason tracking (item 5)
     manager_review_truncated: bool
+    # Transient routing fields (item 4)
+    _verdict: NotRequired[dict[str, Any] | None]
