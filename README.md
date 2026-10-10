@@ -1,6 +1,6 @@
 # The Research Assistant Crew
 
-> A manager agent delegates a research question to three specialist agents, then synthesizes their findings into one verified report — no human stitching required.
+> A manager agent delegates a research question to three specialist agents, then synthesizes their findings into one reviewed report — no human stitching required.
 
 Built with **Streamlit**, **LangGraph**, **LangChain-Groq**, **Groq** (`openai/gpt-oss-120b`), and **Tavily Web Search**.
 
@@ -134,7 +134,7 @@ Scores: URL integrity, report structure, and key-point coverage (keyword heurist
 - **Per-Node Token Budgets**: Writer/Review get 6,000 tokens; Plan node gets 512.
 - **Agent Timeline**: Execution timeline with duration and token counts in the UI.
 - **Live Execution Feedback**: Real-time progress for every agent step.
-- **Export**: 1-click Markdown download of verified research briefings.
+- **Export**: 1-click Markdown download of reviewed research briefings.
 
 ---
 
