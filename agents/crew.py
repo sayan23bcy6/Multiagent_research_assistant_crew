@@ -54,7 +54,7 @@ TOKENS_REVIEW = 6000
 
 
 # ---------------------------------------------------------------------------
-# Pydantic model for Manager plan (item 3)
+# Pydantic model for Manager plan and query routing (item 3)
 # ---------------------------------------------------------------------------
 class ManagerPlanModel(BaseModel):
     core_objective: str
