@@ -36,7 +36,7 @@ from agents.state import AgentLog, ManagerPlan, ResearchState, TavilySource
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Environment-configurable caps (item 4)
+# Configurable revision caps and conditional routing (item 4)
 # ---------------------------------------------------------------------------
 MAX_SEARCH_RETRIES: int = int(os.getenv("MAX_SEARCH_RETRIES", "2"))
 MAX_WRITER_RETRIES: int = int(os.getenv("MAX_WRITER_RETRIES", "1"))
