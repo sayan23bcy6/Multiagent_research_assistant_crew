@@ -1,28 +1,40 @@
 """
 Tests for the Research Assistant Crew.
 
-Covers (item 10):
+Covers:
 - Retry logic in invoke_with_retry
 - URL validation
 - Manager plan parsing
-- Conditional routing (search retry, writer retry)
-- No-silent-fallback behavior (item 1)
-- Golden-output structure checks (3 tests)
+- Manager review verdict parsing
+- Conditional routing and counters
+- Tavily error handling and deduplication
+- check_report_structure checks
+- merge_sources behavior
+- LangGraph graph integration tests (mocked LLM + search)
 """
 
+import collections
 import json
-import re
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langgraph.graph import END
 
 from agents.crew import (
+    build_research_graph,
+    check_report_structure,
     count_cited_source_indices,
     execute_tavily_search,
     extract_urls_from_text,
     invoke_with_retry,
+    make_initial_state,
+    merge_sources,
     parse_manager_plan,
     parse_manager_verdict,
+    route_after_analysis,
+    route_after_review,
+    run_research_stream,
     strip_verdict_block,
     validate_report_urls,
 )
@@ -35,9 +47,21 @@ from agents.state import TavilySource
 @pytest.fixture()
 def sample_sources() -> list[TavilySource]:
     return [
-        TavilySource(title="Alpha Paper", url="https://alpha.example.com/paper", content="Quantum error rate reduced to 0.1%..."),
-        TavilySource(title="Beta Blog", url="https://beta.example.com/post", content="New benchmark shows 99.9% fidelity..."),
-        TavilySource(title="Gamma Docs", url="https://gamma.example.com/docs", content="Algorithm X achieves O(n log n)..."),
+        TavilySource(
+            title="Alpha Paper",
+            url="https://alpha.example.com/paper",
+            content="Quantum error rate reduced to 0.1%...",
+        ),
+        TavilySource(
+            title="Beta Blog",
+            url="https://beta.example.com/post",
+            content="New benchmark shows 99.9% fidelity...",
+        ),
+        TavilySource(
+            title="Gamma Docs",
+            url="https://gamma.example.com/docs",
+            content="Algorithm X achieves O(n log n)...",
+        ),
     ]
 
 
@@ -45,8 +69,16 @@ def sample_sources() -> list[TavilySource]:
 def sample_plan_json() -> str:
     return json.dumps({
         "core_objective": "Analyse quantum error correction advances.",
-        "sub_tasks": ["Review hardware benchmarks", "Examine error rates", "Assess commercial timelines"],
-        "search_queries": ["quantum error correction 2025", "qubit fidelity benchmarks", "quantum computing commercial roadmap"],
+        "sub_tasks": [
+            "Review hardware benchmarks",
+            "Examine error rates",
+            "Assess commercial timelines",
+        ],
+        "search_queries": [
+            "quantum error correction 2025",
+            "qubit fidelity benchmarks",
+            "quantum computing commercial roadmap",
+        ],
     })
 
 
@@ -66,7 +98,10 @@ class TestUrlValidation:
         assert "https://bare.example.com" in urls
 
     def test_validate_report_urls_all_valid(self, sample_sources):
-        report = "See [Alpha Paper](https://alpha.example.com/paper) and [Beta Blog](https://beta.example.com/post)."
+        report = (
+            "See [Alpha Paper](https://alpha.example.com/paper) and "
+            "[Beta Blog](https://beta.example.com/post)."
+        )
         warnings = validate_report_urls(report, sample_sources)
         assert warnings == []
 
@@ -198,6 +233,12 @@ class TestManagerVerdict:
         v = parse_manager_verdict(review)
         assert v["verdict"] == "approve"
 
+    def test_bad_json_verdict_defaults_approve(self):
+        review = "Report text.\n```verdict\nnot-valid-json\n```"
+        v = parse_manager_verdict(review)
+        assert v["verdict"] == "approve"
+        assert v["reasons"] == []
+
     def test_strip_verdict_block(self):
         review = 'Report text.\n```verdict\n{"verdict": "approve", "reasons": []}\n```'
         stripped = strip_verdict_block(review)
@@ -247,11 +288,10 @@ class TestTavilySearchFallback:
 
 
 # ---------------------------------------------------------------------------
-# Golden-output structure tests (item 10)
+# Structure verification tests (replacing TestGoldenOutputStructure)
 # ---------------------------------------------------------------------------
 
-GOOD_REPORT = """
-## Executive Summary
+GOOD_REPORT = """## Executive Summary
 
 Quantum computing has achieved error rates below 1% through surface codes.
 Commercial deployment of fault-tolerant systems is expected within 5 years.
@@ -274,66 +314,364 @@ Companies plan deployment by 2029...
 2. [Beta Blog](https://beta.example.com/post)
 """
 
-BAD_REPORT_NO_SUMMARY = """
-## Introduction
+REPORT_NO_SUMMARY = """## Hardware Benchmarks
 
-Quantum computing is interesting. Let us explore it.
+Details about qubits and fidelity...
 
-## Hardware
+## Error Correction Approaches
 
-Some stuff about hardware.
+Surface codes are dominant...
+
+## Commercial Timeline
+
+Companies plan deployment by 2029...
+
+## Sources
+
+1. [Alpha Paper](https://alpha.example.com/paper)
 """
 
-BAD_REPORT_NO_SOURCES = """
-## Executive Summary
+REPORT_TWO_SECTIONS = """## Executive Summary
 
-Quantum computing is advancing rapidly. Error rates have improved.
+Quantum computing has achieved error rates below 1% through surface codes.
+Commercial deployment of fault-tolerant systems is expected within 5 years.
 
 ## Hardware Benchmarks
 
-Great progress has been made.
+Details about qubits and fidelity...
+
+## Error Correction Approaches
+
+Surface codes are dominant...
+
+## Sources
+
+1. [Alpha Paper](https://alpha.example.com/paper)
+"""
+
+REPORT_NO_SOURCES = """## Executive Summary
+
+Quantum computing has achieved error rates below 1% through surface codes.
+Commercial deployment of fault-tolerant systems is expected within 5 years.
+
+## Hardware Benchmarks
+
+Details about qubits and fidelity...
+
+## Error Correction Approaches
+
+Surface codes are dominant...
+
+## Commercial Timeline
+
+Companies plan deployment by 2029...
 """
 
 
-class TestGoldenOutputStructure:
-    """Golden-output tests for the required report structure (item 10)."""
+class TestReportStructure:
+    def test_good_report_passes(self):
+        problems = check_report_structure(GOOD_REPORT)
+        assert problems == []
 
-    def test_report_has_executive_summary(self):
-        """Report must start with a 2-sentence Executive Summary section."""
-        assert "## Executive Summary" in GOOD_REPORT or "Executive Summary" in GOOD_REPORT
+    def test_missing_summary_detected(self):
+        problems = check_report_structure(REPORT_NO_SUMMARY)
+        assert any("Executive Summary" in p for p in problems)
 
-    def test_report_has_sources_section(self):
-        """Report must have a Sources section with at least one hyperlinked source."""
-        assert "## Sources" in GOOD_REPORT
-        # At least one markdown hyperlink in the sources section
-        sources_section = GOOD_REPORT.split("## Sources")[-1]
-        links = re.findall(r"\[.+?\]\(https?://.+?\)", sources_section)
-        assert len(links) >= 1
+    def test_two_content_sections_detected(self):
+        problems = check_report_structure(REPORT_TWO_SECTIONS)
+        assert any("Expected between 3 and 5 content sections" in p and "2" in p for p in problems)
 
-    def test_report_has_multiple_headed_sections(self):
-        """Report must have at least 3 headed sections (## headers) beyond the summary."""
-        headers = re.findall(r"^##\s+.+", GOOD_REPORT, re.MULTILINE)
-        # Must have Summary + at least 2 content sections + Sources = at least 4
-        assert len(headers) >= 4
+    def test_missing_sources_detected(self):
+        problems = check_report_structure(REPORT_NO_SOURCES)
+        assert any("Sources" in p for p in problems)
 
-    def test_bad_report_missing_summary_detected(self):
-        """Reports without Executive Summary should be detectable."""
-        has_summary = "## Executive Summary" in BAD_REPORT_NO_SUMMARY or (
-            len(re.findall(r"^##\s+Executive\s+Summary", BAD_REPORT_NO_SUMMARY, re.MULTILINE)) > 0
+
+# ---------------------------------------------------------------------------
+# Routing tests
+# ---------------------------------------------------------------------------
+
+class TestRouting:
+    def test_route_after_analysis_too_few_sources(self):
+        state = make_initial_state("quantum")
+        state["claims_analysis"] = "Source #1 confirms finding."
+        state["search_retry_count"] = 0
+        assert route_after_analysis(state) == "search_agent"
+
+    def test_route_after_analysis_retry_cap_reached(self):
+        state = make_initial_state("quantum")
+        state["claims_analysis"] = "Source #1 confirms finding."
+        state["search_retry_count"] = 2
+        assert route_after_analysis(state) == "writer_agent"
+
+    def test_route_after_analysis_sufficient_sources(self):
+        state = make_initial_state("quantum")
+        state["claims_analysis"] = "Source #1, Source #2, Source #3 all confirm."
+        state["search_retry_count"] = 0
+        assert route_after_analysis(state) == "writer_agent"
+
+    def test_route_after_review_reject_retry_zero(self):
+        state = make_initial_state("quantum")
+        state["review_verdict"] = "reject"
+        state["writer_retry_count"] = 0
+        assert route_after_review(state) == "writer_agent"
+
+    def test_route_after_review_reject_retry_cap(self):
+        state = make_initial_state("quantum")
+        state["review_verdict"] = "reject"
+        state["writer_retry_count"] = 1
+        assert route_after_review(state) == END
+
+    def test_route_after_review_approve(self):
+        state = make_initial_state("quantum")
+        state["review_verdict"] = "approve"
+        state["writer_retry_count"] = 0
+        assert route_after_review(state) == END
+
+
+# ---------------------------------------------------------------------------
+# merge_sources tests
+# ---------------------------------------------------------------------------
+
+class TestMergeSources:
+    def test_dedupe_by_url(self):
+        s1 = TavilySource(title="S1", url="https://example.com/1", content="c1")
+        s2 = TavilySource(title="S2", url="https://example.com/1", content="c2")
+        merged = merge_sources([s1], [s2])
+        assert len(merged) == 1
+        assert merged[0]["title"] == "S1"
+
+    def test_order_preserved(self):
+        s1 = TavilySource(title="S1", url="https://example.com/1", content="c1")
+        s2 = TavilySource(title="S2", url="https://example.com/2", content="c2")
+        s3 = TavilySource(title="S3", url="https://example.com/3", content="c3")
+        merged = merge_sources([s1, s2], [s3, s1])
+        assert [s["url"] for s in merged] == [
+            "https://example.com/1",
+            "https://example.com/2",
+            "https://example.com/3",
+        ]
+
+    def test_cap_respected(self):
+        sources = [
+            TavilySource(title=f"S{i}", url=f"https://example.com/{i}", content=f"c{i}")
+            for i in range(10)
+        ]
+        merged = merge_sources(sources[:5], sources[5:], limit=8)
+        assert len(merged) == 8
+
+
+# ---------------------------------------------------------------------------
+# Graph integration tests with FakeLLM
+# ---------------------------------------------------------------------------
+
+class FakeLLM:
+    def __init__(self, cited_sources: int = 3, always_reject: bool = False):
+        self.cited_sources = cited_sources
+        self.always_reject = always_reject
+        self.writer_prompts: list[str] = []
+        self.role_calls: collections.Counter = collections.Counter()
+
+    def invoke(self, messages):
+        system = messages[0].content
+        if "core_objective" in system:
+            self.role_calls["plan"] += 1
+            content = json.dumps({
+                "core_objective": "Understand the quantum landscape.",
+                "sub_tasks": [
+                    "Hardware benchmarks",
+                    "Error correction",
+                    "Commercial roadmaps",
+                ],
+                "search_queries": [
+                    "quantum computing benchmarks",
+                    "surface codes",
+                    "quantum hardware roadmaps",
+                ],
+            })
+        elif "Critical Research Analyst" in system:
+            self.role_calls["analysis"] += 1
+            claim_blocks = []
+            for i in range(1, self.cited_sources + 1):
+                claim_blocks.append(
+                    f"**Claim**: Empirical finding {i}.\n"
+                    f"- Supporting Evidence: Evidence from Source #{i}.\n"
+                    f"- Source Citation: Source #{i}\n"
+                )
+            content = "\n\n".join(claim_blocks)
+        elif "Senior Research Librarian" in system:
+            self.role_calls["search"] += 1
+            content = "**Source #1** — Alpha ...\n**Source #2** — Beta ...\n**Source #3** — Gamma ..."
+        elif "Technical Report Writer" in system:
+            self.role_calls["writer"] += 1
+            self.writer_prompts.append(messages[-1].content)
+            content = (
+                "## Executive Summary\n\n"
+                "Quantum computing has achieved critical error mitigation milestones. "
+                "Hardware roadmap targets point toward fault tolerance by 2030.\n\n"
+                "## Hardware Benchmarks\n\n"
+                "Qubit fidelity exceeds thresholds.\n\n"
+                "## Error Correction Approaches\n\n"
+                "Surface code implementations demonstrate logical qubit gain.\n\n"
+                "## Commercial Timeline\n\n"
+                "Leading vendors target utility scale by end of decade.\n\n"
+                "## Sources\n\n"
+                "1. [Alpha](https://alpha.example.com/a)\n"
+                "2. [Beta](https://beta.example.com/b)\n"
+            )
+        elif "```verdict" in system:
+            self.role_calls["review"] += 1
+            report_body = (
+                "## Executive Summary\n\n"
+                "Quantum computing has achieved critical error mitigation milestones. "
+                "Hardware roadmap targets point toward fault tolerance by 2030.\n\n"
+                "## Hardware Benchmarks\n\n"
+                "Qubit fidelity exceeds thresholds.\n\n"
+                "## Error Correction Approaches\n\n"
+                "Surface code implementations demonstrate logical qubit gain.\n\n"
+                "## Commercial Timeline\n\n"
+                "Leading vendors target utility scale by end of decade.\n\n"
+                "## Sources\n\n"
+                "1. [Alpha](https://alpha.example.com/a)\n"
+                "2. [Beta](https://beta.example.com/b)\n"
+            )
+            if self.always_reject:
+                verdict_json = json.dumps({
+                    "verdict": "reject",
+                    "reasons": ["needs more evidence"],
+                })
+            else:
+                verdict_json = json.dumps({
+                    "verdict": "approve",
+                    "reasons": [],
+                })
+            content = f"{report_body}\n\n```verdict\n{verdict_json}\n```"
+        else:
+            raise ValueError(f"Unknown system message: {system[:100]}")
+
+        return types.SimpleNamespace(
+            content=content,
+            usage_metadata={"total_tokens": 10},
+            response_metadata={"finish_reason": "stop"},
         )
-        assert not has_summary
 
-    def test_bad_report_missing_sources_detected(self):
-        """Reports without Sources section should be detectable."""
-        assert "## Sources" not in BAD_REPORT_NO_SOURCES
 
-    def test_executive_summary_has_two_sentences(self):
-        """Executive Summary should have approximately 2 sentences."""
-        match = re.search(
-            r"## Executive Summary\s*\n+(.*?)(?=\n##|\Z)", GOOD_REPORT, re.DOTALL
-        )
-        assert match is not None
-        summary_text = match.group(1).strip()
-        # Count sentences by splitting on . ! ?
-        sentences = [s.strip() for s in re.split(r"[.!?]+", summary_text) if s.strip()]
-        assert 2 <= len(sentences) <= 4  # allow slight flexibility
+class TestGraphIntegration:
+    def test_retry_path_always_reject_cited_sources_1(self):
+        """Test A (retry path, always reject, cited_sources=1)."""
+        fake = FakeLLM(cited_sources=1, always_reject=True)
+        with patch("agents.crew.get_llm", return_value=fake), patch(
+            "agents.crew.TavilyClient"
+        ) as mock_tavily_cls:
+            mock_tavily = MagicMock()
+            mock_tavily.search.return_value = {
+                "results": [
+                    {
+                        "title": "Alpha",
+                        "url": "https://alpha.example.com/a",
+                        "content": "Alpha content",
+                        "raw_content": "Alpha raw",
+                    },
+                    {
+                        "title": "Beta",
+                        "url": "https://beta.example.com/b",
+                        "content": "Beta content",
+                        "raw_content": "Beta raw",
+                    },
+                    {
+                        "title": "Gamma",
+                        "url": "https://gamma.example.com/c",
+                        "content": "Gamma content",
+                        "raw_content": "Gamma raw",
+                    },
+                ]
+            }
+            mock_tavily_cls.return_value = mock_tavily
+
+            app = build_research_graph("dummy_groq", "dummy_tavily")
+            final = app.invoke(make_initial_state("quantum"))
+
+            assert fake.role_calls["search"] == 3
+            assert fake.role_calls["analysis"] == 3
+            assert fake.role_calls["writer"] == 2
+            assert fake.role_calls["review"] == 2
+            assert final["search_retry_count"] == 2
+            assert final["writer_retry_count"] == 1
+            assert final["final_report"]
+            assert "```verdict" not in final["final_report"]
+            assert "needs more evidence" in fake.writer_prompts[1]
+
+    def test_approve_path_cited_sources_3(self):
+        """Test B (approve path, cited_sources=3)."""
+        fake = FakeLLM(cited_sources=3, always_reject=False)
+        with patch("agents.crew.get_llm", return_value=fake), patch(
+            "agents.crew.TavilyClient"
+        ) as mock_tavily_cls:
+            mock_tavily = MagicMock()
+            mock_tavily.search.return_value = {
+                "results": [
+                    {
+                        "title": "Alpha",
+                        "url": "https://alpha.example.com/a",
+                        "content": "Alpha content",
+                        "raw_content": "Alpha raw",
+                    },
+                    {
+                        "title": "Beta",
+                        "url": "https://beta.example.com/b",
+                        "content": "Beta content",
+                        "raw_content": "Beta raw",
+                    },
+                    {
+                        "title": "Gamma",
+                        "url": "https://gamma.example.com/c",
+                        "content": "Gamma content",
+                        "raw_content": "Gamma raw",
+                    },
+                ]
+            }
+            mock_tavily_cls.return_value = mock_tavily
+
+            app = build_research_graph("dummy_groq", "dummy_tavily")
+            final = app.invoke(make_initial_state("quantum"))
+
+            assert fake.role_calls["search"] == 1
+            assert fake.role_calls["analysis"] == 1
+            assert fake.role_calls["writer"] == 1
+            assert fake.role_calls["review"] == 1
+            assert final["search_retry_count"] == 0
+            assert final["writer_retry_count"] == 0
+
+    def test_call_cap_aborts(self, monkeypatch):
+        """Test C (cap): monkeypatch MAX_TOTAL_LLM_CALLS to 3, stream aborts with error."""
+        monkeypatch.setattr("agents.crew.MAX_TOTAL_LLM_CALLS", 3)
+        fake = FakeLLM(cited_sources=3, always_reject=False)
+        with patch("agents.crew.get_llm", return_value=fake), patch(
+            "agents.crew.TavilyClient"
+        ) as mock_tavily_cls:
+            mock_tavily = MagicMock()
+            mock_tavily.search.return_value = {
+                "results": [
+                    {
+                        "title": "Alpha",
+                        "url": "https://alpha.example.com/a",
+                        "content": "Alpha content",
+                        "raw_content": "Alpha raw",
+                    },
+                    {
+                        "title": "Beta",
+                        "url": "https://beta.example.com/b",
+                        "content": "Beta content",
+                        "raw_content": "Beta raw",
+                    },
+                    {
+                        "title": "Gamma",
+                        "url": "https://gamma.example.com/c",
+                        "content": "Gamma content",
+                        "raw_content": "Gamma raw",
+                    },
+                ]
+            }
+            mock_tavily_cls.return_value = mock_tavily
+
+            events = list(run_research_stream("quantum", "dummy_k", "dummy_t"))
+            assert "error" in events[-1]
