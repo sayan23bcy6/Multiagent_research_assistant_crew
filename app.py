@@ -1,4 +1,5 @@
 import datetime
+import html
 import os
 import time
 
@@ -282,25 +283,25 @@ col_p1.button(
     "⚛️ Quantum Computing",
     on_click=set_topic,
     args=(f"Current state of quantum computing hardware benchmarks and error correction breakthroughs as of {current_year}",),
-    use_container_width=True,
+    width="stretch",
 )
 col_p2.button(
     "🧠 DeepSeek-R1 Architecture",
     on_click=set_topic,
     args=("DeepSeek-R1 reasoning architecture, training methodology, and reinforcement learning innovations",),
-    use_container_width=True,
+    width="stretch",
 )
 col_p3.button(
     "🔋 Solid-State Batteries",
     on_click=set_topic,
     args=("Solid-state battery commercialization roadmap, energy density gains, and automotive adoption timeline",),
-    use_container_width=True,
+    width="stretch",
 )
 col_p4.button(
     "⚡ Small Language Models",
     on_click=set_topic,
     args=("Advancements in Small Language Models (SLMs) running on edge devices vs frontier LLMs",),
-    use_container_width=True,
+    width="stretch",
 )
 
 # Topic input
@@ -312,7 +313,7 @@ user_topic = st.text_area(
 )
 
 # Run Crew Button — removed unused col_info variable (item 9)
-start_research = st.button("🚀 Launch Research Crew", type="primary", use_container_width=False)
+start_research = st.button("🚀 Launch Research Crew", type="primary", width="content")
 
 # State placeholders for session
 if "crew_results" not in st.session_state:
@@ -519,15 +520,15 @@ if st.session_state.crew_results and st.session_state.crew_results.get("final_re
                 st.info("No agent logs recorded for this run.")
             else:
                 for log in logs:
-                    agent = log.get("agent", "Unknown")
-                    status = log.get("status", "")
+                    agent = html.escape(str(log.get("agent", "Unknown")))
+                    status = html.escape(str(log.get("status", "")))
                     duration = log.get("duration_seconds")
                     tokens = log.get("token_count")
-                    message = log.get("message", "")
+                    message = html.escape(str(log.get("message", "")))
 
                     dur_str = f"⏱ {duration:.2f}s" if duration is not None else ""
                     tok_str = f"🪙 {tokens} tokens" if tokens is not None else ""
-                    meta = "  ".join(filter(None, [dur_str, tok_str]))
+                    meta = html.escape("  ".join(filter(None, [dur_str, tok_str])))
 
                     st.markdown(
                         f'<div class="agent-log-row">'
