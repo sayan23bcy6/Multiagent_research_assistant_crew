@@ -6,7 +6,7 @@ Built with **Streamlit**, **LangGraph**, **LangChain-Groq**, **Groq** (`openai/g
 
 ---
 
-## 🏛️ Architecture
+##  Architecture
 
 ```
 manager_plan → search_agent → analysis_agent ─┬→ writer_agent → manager_review ─┬→ END
@@ -32,7 +32,7 @@ The architecture diagram is also rendered interactively in the **🏛️ Archite
 
 ---
 
-## 🔒 Source Integrity
+##  Source Integrity
 
 - Tavily results are kept as **structured data** (`TavilySource`) through the entire pipeline.
 - The Search Agent refers to sources by **index** (`Source #1`, `Source #2`, …) — the LLM never
@@ -43,7 +43,7 @@ The architecture diagram is also rendered interactively in the **🏛️ Archite
 
 ---
 
-## 🚀 Quickstart
+##  Quickstart
 
 ### 1. Install Dependencies
 
@@ -87,7 +87,7 @@ docker run -p 8501:8501 \
 
 ---
 
-## ⚙️ Configuration
+##  Configuration
 
 | Environment Variable | Default | Description |
 |---|---|---|
@@ -101,7 +101,7 @@ docker run -p 8501:8501 \
 
 ---
 
-## 🧪 Tests & CI
+##  Tests & CI
 
 ```bash
 make test    # pytest (mocks Groq and Tavily — no API keys needed)
@@ -112,7 +112,7 @@ CI runs on every push and pull request via [`.github/workflows/ci.yml`](.github/
 
 ---
 
-## 📊 Evaluation Harness
+##  Evaluation Harness
 
 ```bash
 make evals   # requires live API keys — NOT run in CI
@@ -125,7 +125,7 @@ Scores: URL integrity, report structure, and key-point coverage (keyword heurist
 
 ---
 
-## 🌟 Key Features
+##  Key Features
 
 - **Structured Manager Plan**: JSON-validated `core_objective`, `sub_tasks`, and `search_queries`.
 - **Real Source Content**: Tavily `include_raw_content` with per-source 1,500-token budget.
@@ -138,7 +138,7 @@ Scores: URL integrity, report structure, and key-point coverage (keyword heurist
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 .
@@ -163,7 +163,7 @@ Scores: URL integrity, report structure, and key-point coverage (keyword heurist
 
 ---
 
-## 🔮 Future Work
+##  Future Work
 
 - Model fallback: try next model in a list on 429 or model error.
 - Streaming token-by-token output per agent node.
