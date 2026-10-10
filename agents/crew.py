@@ -115,6 +115,53 @@ def invoke_with_retry(
                 raise
 
 
+def _usage_tokens(response: Any) -> int | None:
+    """Extract total_tokens safely from LLM response usage metadata."""
+    usage = getattr(response, "usage_metadata", None) or {}
+    return usage.get("total_tokens")
+
+
+def _finish_reason(response: Any) -> str:
+    """Extract finish_reason safely from LLM response metadata."""
+    meta = getattr(response, "response_metadata", None) or {}
+    return str(meta.get("finish_reason") or "")
+
+
+# ---------------------------------------------------------------------------
+# Query refinement and source merging for search retries
+# ---------------------------------------------------------------------------
+
+def refined_queries(topic: str, attempt: int) -> list[str]:
+    """Return refined search queries for retry attempts."""
+    if attempt <= 1:
+        return [
+            f"{topic} primary sources",
+            f"{topic} benchmarks and empirical results",
+        ]
+    return [
+        f"{topic} official documentation",
+        f"{topic} academic papers",
+    ]
+
+
+def merge_sources(
+    existing: list[TavilySource],
+    new: list[TavilySource],
+    limit: int = 8,
+) -> list[TavilySource]:
+    """Concatenate existing and new sources, deduplicate by URL preserving order, capped at limit."""
+    merged: list[TavilySource] = []
+    seen_urls: set[str] = set()
+    for s in existing + new:
+        url = s.get("url")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            merged.append(s)
+            if len(merged) >= limit:
+                break
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Tavily search with real content (item 2)
 # ---------------------------------------------------------------------------
@@ -127,7 +174,7 @@ def execute_tavily_search(
     """Run queries via Tavily with raw content, deduplicate, apply per-source budget."""
     client = TavilyClient(api_key=tavily_api_key)
     all_results: list[TavilySource] = []
-    seen_urls: set = set()
+    seen_urls: set[str] = set()
 
     for q in queries[:3]:
         clean_q = q.strip().strip('"').strip("'").strip("`").strip("*")
@@ -234,8 +281,10 @@ def parse_manager_verdict(review_text: str) -> dict[str, Any]:
     match = re.search(r"```verdict\s*(\{.*?\})\s*```", review_text, re.DOTALL)
     if match:
         try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError:
+            data = json.loads(match.group(1))
+            if isinstance(data, dict):
+                return data
+        except Exception:
             pass
     return {"verdict": "approve", "reasons": []}
 
@@ -253,6 +302,108 @@ def count_cited_source_indices(claims_text: str) -> int:
     """Count how many distinct Source #N references appear in the analyst output."""
     matches = re.findall(r"Source\s*#(\d+)", claims_text, re.IGNORECASE)
     return len(set(matches))
+
+
+# ---------------------------------------------------------------------------
+# Check report structure (single source of truth for structure checks)
+# ---------------------------------------------------------------------------
+
+def check_report_structure(report: str) -> list[str]:
+    """Check report structure against formatting rules; return list of problem descriptions (empty if valid)."""
+    problems: list[str] = []
+
+    # Missing "## Executive Summary" (case-insensitive)
+    has_summary = bool(
+        re.search(r"^##\s+Executive\s+Summary", report, re.IGNORECASE | re.MULTILINE)
+    )
+    if not has_summary:
+        problems.append("Missing '## Executive Summary' section")
+
+    # The number of other "## " headers that are not Executive Summary or Sources must be between 3 and 5 inclusive
+    all_headers = re.findall(r"^##\s+(.+)$", report, re.MULTILINE)
+    content_headers = [
+        h.strip()
+        for h in all_headers
+        if not re.match(r"^Executive\s+Summary\b", h.strip(), re.IGNORECASE)
+        and not re.match(r"^Sources?\b", h.strip(), re.IGNORECASE)
+    ]
+    content_count = len(content_headers)
+    if not (3 <= content_count <= 5):
+        problems.append(
+            f"Expected between 3 and 5 content sections, found {content_count}"
+        )
+
+    # Missing "## Sources" section
+    has_sources = bool(
+        re.search(r"^##\s+Sources?", report, re.IGNORECASE | re.MULTILINE)
+    )
+    if not has_sources:
+        problems.append("Missing '## Sources' section")
+
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# Module-level routing functions (pure functions, no state mutations)
+# ---------------------------------------------------------------------------
+
+def route_after_analysis(state: ResearchState) -> str:
+    """Route to search_agent if fewer than 3 cited sources and within retry limit; else writer_agent."""
+    cited_count = count_cited_source_indices(state.get("claims_analysis") or "")
+    retry_count = state.get("search_retry_count", 0)
+
+    if cited_count < 3 and retry_count < MAX_SEARCH_RETRIES:
+        logger.info(
+            "Only %d cited sources found (need ≥3). Routing back to search (retry %d/%d).",
+            cited_count,
+            retry_count + 1,
+            MAX_SEARCH_RETRIES,
+        )
+        return "search_agent"
+    return "writer_agent"
+
+
+def route_after_review(state: ResearchState) -> str:
+    """Route to writer_agent if review was rejected and within retry limit; else END."""
+    verdict = state.get("review_verdict")
+    retry_count = state.get("writer_retry_count", 0)
+
+    if verdict == "reject" and retry_count < MAX_WRITER_RETRIES:
+        logger.info(
+            "Manager rejected draft (retry %d/%d). Reasons: %s",
+            retry_count + 1,
+            MAX_WRITER_RETRIES,
+            state.get("review_reasons", []),
+        )
+        return "writer_agent"
+    return END
+
+
+# ---------------------------------------------------------------------------
+# Initial state builder
+# ---------------------------------------------------------------------------
+
+def make_initial_state(topic: str) -> ResearchState:
+    """Construct an initial ResearchState with all fields defaulted."""
+    return {
+        "topic": topic,
+        "plan": None,
+        "parsed_plan": None,
+        "sources": None,
+        "raw_sources_list": [],
+        "claims_analysis": None,
+        "analyst_claims": [],
+        "draft_report": None,
+        "final_report": None,
+        "url_validation_warnings": [],
+        "agent_logs": [],
+        "error": None,
+        "search_retry_count": 0,
+        "writer_retry_count": 0,
+        "manager_review_truncated": False,
+        "review_verdict": None,
+        "review_reasons": [],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +430,10 @@ def build_research_graph(
 
     def _call(llm: ChatGroq, messages: list[Any]) -> Any:
         call_counter["n"] += 1
-        if call_counter["n"] > MAX_TOTAL_LLM_CALLS:
+        max_calls = MAX_TOTAL_LLM_CALLS
+        if call_counter["n"] > max_calls:
             raise RuntimeError(
-                f"Exceeded MAX_TOTAL_LLM_CALLS={MAX_TOTAL_LLM_CALLS}. Aborting."
+                f"Exceeded MAX_TOTAL_LLM_CALLS={max_calls}. Aborting."
             )
         return invoke_with_retry(llm, messages)
 
@@ -302,6 +454,7 @@ def build_research_graph(
         raw_text = response.content
 
         # Parse structured plan (item 3)
+        parsed_plan_dict: ManagerPlan | None = None
         parsed = parse_manager_plan(raw_text)
         if parsed:
             plan_display = (
@@ -309,7 +462,7 @@ def build_research_graph(
                 f"**Sub-Tasks:**\n" + "\n".join(f"- {t}" for t in parsed.sub_tasks) + "\n\n"
                 "**Search Queries:**\n" + "\n".join(f"- `{q}`" for q in parsed.search_queries)
             )
-            parsed_plan_dict: ManagerPlan | None = {
+            parsed_plan_dict = {
                 "core_objective": parsed.core_objective,
                 "sub_tasks": parsed.sub_tasks,
                 "search_queries": parsed.search_queries,
@@ -317,7 +470,6 @@ def build_research_graph(
         else:
             logger.warning("Manager plan JSON parse failed; using raw text as plan.")
             plan_display = raw_text
-            parsed_plan_dict = None
 
         duration = time.monotonic() - t0
         log_entry: AgentLog = {
@@ -325,7 +477,7 @@ def build_research_graph(
             "status": "Plan Created",
             "message": "Deconstructed topic into sub-tasks and delegated search objectives.",
             "duration_seconds": round(duration, 2),
-            "token_count": getattr(response, "usage_metadata", {}).get("total_tokens"),
+            "token_count": _usage_tokens(response),
             "data": plan_display,
         }
         return {
@@ -340,15 +492,25 @@ def build_research_graph(
     def search_node(state: ResearchState) -> dict[str, Any]:
         t0 = time.monotonic()
         topic = state["topic"]
-        parsed_plan: ManagerPlan | None = state.get("parsed_plan")
-
-        # Use parsed search_queries directly (item 3 — no redundant LLM call)
-        if parsed_plan and parsed_plan.get("search_queries"):
-            queries = parsed_plan["search_queries"]
+        is_retry = state.get("claims_analysis") is not None
+        if is_retry:
+            retry_count = state.get("search_retry_count", 0) + 1
+            queries = refined_queries(topic, retry_count)
         else:
-            queries = [topic]
+            retry_count = state.get("search_retry_count", 0)
+            parsed_plan: ManagerPlan | None = state.get("parsed_plan")
+            if parsed_plan and parsed_plan.get("search_queries"):
+                queries = parsed_plan["search_queries"]
+            else:
+                queries = [topic]
 
-        search_results = execute_tavily_search(tavily_api_key, queries, max_results=3)
+        new_results = execute_tavily_search(tavily_api_key, queries, max_results=3)
+
+        if is_retry:
+            existing = state.get("raw_sources_list") or []
+            search_results = merge_sources(existing, new_results, limit=8)
+        else:
+            search_results = new_results
 
         if not search_results:
             # Fallback: retry with topic directly (no LLM call needed)
@@ -396,15 +558,16 @@ def build_research_graph(
             "status": "Sources Curated",
             "message": (
                 f"Retrieved {len(search_results)} sources via Tavily. "
-                f"Retry count: {state.get('search_retry_count', 0)}"
+                f"Retry count: {retry_count}"
             ),
             "duration_seconds": round(duration, 2),
-            "token_count": getattr(curation_response, "usage_metadata", {}).get("total_tokens"),
+            "token_count": _usage_tokens(curation_response),
             "data": sources_text,
         }
         return {
             "sources": sources_text,
             "raw_sources_list": search_results,
+            "search_retry_count": retry_count,
             "agent_logs": state.get("agent_logs", []) + [log_entry],
         }
 
@@ -455,7 +618,7 @@ def build_research_graph(
             "status": "Claims Extracted",
             "message": "Extracted empirical claims, cross-referenced source evidence.",
             "duration_seconds": round(duration, 2),
-            "token_count": getattr(response, "usage_metadata", {}).get("total_tokens"),
+            "token_count": _usage_tokens(response),
             "data": claims_text,
         }
         return {
@@ -473,6 +636,12 @@ def build_research_graph(
         claims = state.get("claims_analysis", "")
         raw_sources = state.get("raw_sources_list", [])
 
+        is_rewrite = state.get("draft_report") is not None
+        if is_rewrite:
+            writer_retry_count = state.get("writer_retry_count", 0) + 1
+        else:
+            writer_retry_count = state.get("writer_retry_count", 0)
+
         # Give writer the structured source list so it can hyperlink correctly
         source_list_block = "\n".join(
             f"{i + 1}. [{r['title']}]({r['url']})"
@@ -488,6 +657,15 @@ def build_research_graph(
             "3–5 headed sections with deep technical evidence, and the complete sources list. "
             "No filler intros. Do NOT add URLs beyond the authorised list above."
         )
+
+        if is_rewrite:
+            reasons = state.get("review_reasons", [])
+            if reasons:
+                feedback_lines = "\n".join(f"- {r}" for r in reasons)
+                writer_prompt += f"\n\nManager feedback to address in this revision:\n{feedback_lines}"
+            else:
+                writer_prompt += "\n\nManager feedback to address in this revision:\n"
+
         response = _call(
             llm_writer,
             [
@@ -498,7 +676,7 @@ def build_research_graph(
         draft_text = response.content
 
         # Detect truncation (item 5)
-        finish_reason = getattr(response, "response_metadata", {}).get("finish_reason", "")
+        finish_reason = _finish_reason(response)
         if finish_reason == "length":
             logger.warning("Writer output was truncated (finish_reason=length).")
             draft_text += (
@@ -512,14 +690,15 @@ def build_research_graph(
             "status": "Draft Report Written",
             "message": (
                 "Synthesized findings into a structured technical briefing. "
-                f"Writer retry: {state.get('writer_retry_count', 0)}"
+                f"Writer retry: {writer_retry_count}"
             ),
             "duration_seconds": round(duration, 2),
-            "token_count": getattr(response, "usage_metadata", {}).get("total_tokens"),
+            "token_count": _usage_tokens(response),
             "data": draft_text,
         }
         return {
             "draft_report": draft_text,
+            "writer_retry_count": writer_retry_count,
             "agent_logs": state.get("agent_logs", []) + [log_entry],
         }
 
@@ -551,13 +730,19 @@ def build_research_graph(
         raw_review = response.content
 
         # Detect truncation (item 5)
-        finish_reason = getattr(response, "response_metadata", {}).get("finish_reason", "")
+        finish_reason = _finish_reason(response)
         truncated = finish_reason == "length"
         if truncated:
             logger.warning("Manager review output was truncated (finish_reason=length).")
 
         # Parse verdict (item 4)
-        verdict = parse_manager_verdict(raw_review)
+        verdict_data = parse_manager_verdict(raw_review)
+        raw_verdict = verdict_data.get("verdict", "approve")
+        verdict = str(raw_verdict).lower() if isinstance(raw_verdict, str) else "approve"
+        if verdict not in ("approve", "reject"):
+            verdict = "approve"
+        reasons = [str(r) for r in verdict_data.get("reasons", [])] if verdict == "reject" else []
+
         final_text = strip_verdict_block(raw_review)
 
         if truncated:
@@ -572,60 +757,20 @@ def build_research_graph(
         duration = time.monotonic() - t0
         log_entry: AgentLog = {
             "agent": "Manager Agent (Review)",
-            "status": f"Review complete — verdict: {verdict.get('verdict', 'approve')}",
+            "status": f"Review complete — verdict: {verdict}",
             "message": "Manager verified the report against claims and source list.",
             "duration_seconds": round(duration, 2),
-            "token_count": getattr(response, "usage_metadata", {}).get("total_tokens"),
+            "token_count": _usage_tokens(response),
             "data": final_text,
         }
         return {
             "final_report": final_text,
             "url_validation_warnings": url_warnings,
             "manager_review_truncated": truncated,
+            "review_verdict": verdict,
+            "review_reasons": reasons,
             "agent_logs": state.get("agent_logs", []) + [log_entry],
-            # Store verdict for conditional routing
-            "_verdict": verdict,
         }
-
-    # -----------------------------------------------------------------------
-    # Conditional routing: search retry (item 4)
-    # -----------------------------------------------------------------------
-    def route_after_analysis(state: ResearchState) -> str:
-        cited_count = count_cited_source_indices(state.get("claims_analysis", ""))
-        retry_count = state.get("search_retry_count", 0)
-
-        if cited_count < 3 and retry_count < MAX_SEARCH_RETRIES:
-            logger.info(
-                "Only %d cited sources found (need ≥3). Routing back to search (retry %d/%d).",
-                cited_count,
-                retry_count + 1,
-                MAX_SEARCH_RETRIES,
-            )
-            # Increment counter via state update
-            state["search_retry_count"] = retry_count + 1
-            return "search_agent"
-        return "writer_agent"
-
-    # -----------------------------------------------------------------------
-    # Conditional routing: writer retry (item 4)
-    # -----------------------------------------------------------------------
-    def route_after_review(state: ResearchState) -> str:
-        # _verdict is a transient key — safe to use for routing only
-        verdict: dict[str, Any] = state.pop("_verdict", {}) or {}
-
-        retry_count = state.get("writer_retry_count", 0)
-
-        if verdict.get("verdict") == "reject" and retry_count < MAX_WRITER_RETRIES:
-            reasons = verdict.get("reasons", [])
-            logger.info(
-                "Manager rejected draft (retry %d/%d). Reasons: %s",
-                retry_count + 1,
-                MAX_WRITER_RETRIES,
-                reasons,
-            )
-            state["writer_retry_count"] = retry_count + 1
-            return "writer_agent"
-        return END
 
     # -----------------------------------------------------------------------
     # Assemble graph
@@ -670,23 +815,7 @@ def run_research_stream(
     """Execute the research workflow, yielding state updates after each node."""
     app = build_research_graph(groq_api_key, tavily_api_key, model_name, temperature)
 
-    initial_state: ResearchState = {
-        "topic": topic,
-        "plan": None,
-        "parsed_plan": None,
-        "sources": None,
-        "raw_sources_list": [],
-        "claims_analysis": None,
-        "analyst_claims": [],
-        "draft_report": None,
-        "final_report": None,
-        "url_validation_warnings": [],
-        "agent_logs": [],
-        "error": None,
-        "search_retry_count": 0,
-        "writer_retry_count": 0,
-        "manager_review_truncated": False,
-    }
+    initial_state: ResearchState = make_initial_state(topic)
 
     try:
         yield from app.stream(initial_state)
