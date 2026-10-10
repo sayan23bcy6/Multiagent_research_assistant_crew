@@ -116,7 +116,7 @@ def invoke_with_retry(
 
 
 # ---------------------------------------------------------------------------
-# Tavily search with real content (item 2)
+# Tavily search with real content and 1500-token budget (item 2)
 # ---------------------------------------------------------------------------
 
 def execute_tavily_search(
